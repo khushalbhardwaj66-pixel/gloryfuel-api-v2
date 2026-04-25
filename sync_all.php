@@ -1,50 +1,46 @@
 <?php
-// Universal Sync Engine
+// Smart Scraper Sync
 require_once "config/cors.php";
 require_once "config/database.php";
 
 $database = new Database();
 $db = $database->getConnection();
 
-$apiKey = getenv('ROLEX_API_KEY') ?: "YOUR_FALLBACK_KEY";
-$apiBase = "https://rolexcoderz.in/PY";
+$response = ["status" => "success", "synced" => [], "count" => 0];
 
-$response = ["status" => "success", "batches_synced" => 0, "errors" => []];
-
-function api_fetch($url, $key) {
+function get_content($url) {
     $ch = curl_init();
-    curl_setopt($ch, CURLOPT_URL, $url . "?api_key=" . $key);
+    curl_setopt($ch, CURLOPT_URL, $url);
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+    curl_setopt($ch, CURLOPT_USERAGENT, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
     $data = curl_exec($ch);
     curl_close($ch);
-    return json_decode($data, true);
+    return $data;
 }
 
 try {
-    // 1. Sync NextToppers (NT)
-    $nt_data = api_fetch($apiBase . "/nt/batches", $apiKey);
-    if (isset($nt_data['data'])) {
-        foreach ($nt_data['data'] as $b) {
-            $stmt = $db->prepare("INSERT INTO batches (external_id, name, banner_url, brand) VALUES (?, ?, ?, 'NT') ON DUPLICATE KEY UPDATE name=VALUES(name), banner_url=VALUES(banner_url)");
-            $stmt->execute([$b['id'], $b['name'], $b['image']]);
-            $response['batches_synced']++;
-        }
-    }
+    // 1. Sync NextToppers Batches
+    $html = get_content("https://nexttoppers.com/batches");
+    
+    // Look for batch IDs and Names in the HTML
+    preg_match_all('/href="\/batch-details\/([^"]+)".*?alt="([^"]+)"/s', $html, $matches);
 
-    // 2. Sync Physics Wallah (PW)
-    $pw_data = api_fetch($apiBase . "/pw/batches", $apiKey);
-    if (isset($pw_data['data'])) {
-        foreach ($pw_data['data'] as $b) {
-            $stmt = $db->prepare("INSERT INTO batches (external_id, name, banner_url, brand) VALUES (?, ?, ?, 'PW') ON DUPLICATE KEY UPDATE name=VALUES(name), banner_url=VALUES(banner_url)");
-            $stmt->execute([$b['id'], $b['name'], $b['image']]);
-            $response['batches_synced']++;
+    if (!empty($matches[1])) {
+        foreach ($matches[1] as $index => $external_id) {
+            $name = $matches[2][$index];
+            
+            $stmt = $db->prepare("INSERT INTO batches (external_id, name, brand) VALUES (?, ?, 'NT') ON DUPLICATE KEY UPDATE name=VALUES(name)");
+            $stmt->execute([$external_id, $name]);
+            
+            $response['synced'][] = $name;
+            $response['count']++;
         }
     }
 
     echo json_encode($response);
 
 } catch (Exception $e) {
-    http_response_code(500);
     echo json_encode(["status" => "error", "message" => $e->getMessage()]);
 }
 ?>
